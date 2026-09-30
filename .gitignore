@@ -1,12 +1,60 @@
+# ===== Virtual environments =====
+.venv/
+venv/
+env/
+ENV/
+.conda/
+env.bak/
+venv.bak/
+
+# ===== Python =====
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+*.egg
+
+# ===== ML model files & weights =====
 *.pt
 *.bin
 *.model
 *.vocab
-WikiSQL/
+*.pth
+*.ckpt
+*.h5
+*.safetensors
+*.onnx
 *.tar.bz2
+
+# ===== Data / datasets =====
+WikiSQL/
 spm_corpus.txt
 *_pairs.jsonl
 results/*.jsonl
+data/
+datasets/
+
+# ===== Jupyter =====
 .ipynb_checkpoints/
+
+# ===== Logs & experiment tracking =====
+logs/
+wandb/
+mlruns/
+checkpoints/
+
+# ===== Environment variables =====
+.env
+.env.*
+
+# ===== IDE / Editor =====
+.vscode/
+.idea/
+*.swp
+
+# ===== OS =====
+.DS_Store
+Thumbs.db
