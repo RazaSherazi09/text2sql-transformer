@@ -6,3 +6,4 @@ tqdm
 tabulate
 matplotlib
 streamlit
+huggingface_hub
