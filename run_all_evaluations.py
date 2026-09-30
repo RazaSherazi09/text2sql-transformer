@@ -1,5 +1,6 @@
-import torch
+import json
 import os
+import torch
 from evaluate_model import (
     load_model,
     gold_roundtrip_check,
@@ -11,15 +12,15 @@ from starter.data_prep import load_split
 
 def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Running full evaluation pipeline on {device}...")
+    print(f"Executing complete evaluation pipeline on: {device}")
 
-    # 1. Gold Round-Trip Check
+    # 1. Gold Round-Trip Check (Section 3.2)
     gold_roundtrip_check("dev")
 
-    # 2. Load trained model
+    # 2. Load best checkpoint
     model, sp = load_model("best_model.pt", "sql_sp.model", device=device)
 
-    # 3. Generate Dev Greedy, Dev Beam (4), and Test Predictions
+    # 3. Generate Official Predictions (Task 4.3 / Table 3)
     dev_greedy_lf, dev_greedy_ex, dev_greedy_fail = generate_predictions_and_evaluate(
         model, sp, split="dev", method="greedy", output_path="results/dev_greedy.jsonl", device=device
     )
@@ -30,7 +31,7 @@ def main():
         model, sp, split="test", method="greedy", output_path="results/test.jsonl", device=device
     )
 
-    # 4. Write Table 3: Official Metrics
+    # 4. Generate Table 3 Markdown
     table3 = f"""# Table 3 – Official metrics
 
 | Split | Decoding | Logical form (%) | Execution (%) | Parse failures (%) |
@@ -39,14 +40,15 @@ def main():
 | Dev | beam (4) | {dev_beam_lf:.2f} | {dev_beam_ex:.2f} | {dev_beam_fail:.2f} |
 | Test | greedy | {test_lf:.2f} | {test_ex:.2f} | {test_fail:.2f} |
 """
+    os.makedirs("results/tables", exist_ok=True)
     with open("results/tables/table3_official_metrics.md", "w") as f:
         f.write(table3)
+    print("Saved: results/tables/table3_official_metrics.md")
 
-    # 5. Component Accuracy (Table 4)
-    # Compare Dev Greedy against gold
+    # 5. Component Accuracy on Dev (Table 4)
     examples, _ = load_split("dev")
     with open("results/dev_greedy.jsonl", "r", encoding="utf-8") as f:
-        preds = [eval(line) for line in f]
+        preds = [json.loads(line) for line in f]
 
     total = len(examples)
     sel_ok, agg_ok, where_ok = 0, 0, 0
@@ -74,14 +76,16 @@ def main():
 """
     with open("results/tables/table4_component_accuracy.md", "w") as f:
         f.write(table4)
+    print("Saved: results/tables/table4_component_accuracy.md")
 
-    # 6. Qualitative Samples (results/samples.md)
+    # 6. Qualitative Samples (Task 4.6)
     generate_samples_md(model, sp, device=device)
 
-    # 7. Figure 4: Cross-attention Map
+    # 7. Cross-Attention Map (Figure 4)
     plot_attention_map(model, sp, example_idx=0, device=device)
 
-    print("\nAll deliverables generated in results/ directory!")
+    print("\nALL TASKS COMPLETE: All tables, figures, and samples are populated in results/.")
+
 
 if __name__ == "__main__":
     main()

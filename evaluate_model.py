@@ -41,8 +41,7 @@ def load_model(checkpoint_path="best_model.pt", sp_path="sql_sp.model", device="
 
 
 def gold_roundtrip_check(split="dev"):
-    """Correctness Check: Gold roundtrip accuracy must exceed 99%."""
-    print("Running Gold Round-Trip Check...")
+    print("\n--- Running Gold Round-Trip Check (Section 3.2) ---")
     examples, _ = load_split(split)
     parsed_gold_file = f"results/gold_{split}_parsed.jsonl"
     os.makedirs("results", exist_ok=True)
@@ -50,7 +49,8 @@ def gold_roundtrip_check(split="dev"):
     with open(parsed_gold_file, "w", encoding="utf-8") as out_f:
         for ex in examples:
             tgt_text = encode_target(ex["sql"])
-            parsed = parse_sql_string(tgt_text)
+            # Pass original question for casing resolution
+            parsed = parse_sql_string(tgt_text, original_question=ex["question"])
             if parsed is not None:
                 out_f.write(json.dumps({"query": parsed}) + "\n")
             else:
@@ -63,15 +63,17 @@ def gold_roundtrip_check(split="dev"):
 
 
 def run_official_evaluator(split, pred_file):
-    """Invokes WikiSQL/evaluate.py and parses LF and Ex accuracy."""
     cmd = f"python WikiSQL/evaluate.py WikiSQL/data/{split}.jsonl WikiSQL/data/{split}.db {pred_file}"
     res = subprocess.run(cmd, shell=True, capture_output=True, text=True)
     lf_acc, ex_acc = 0.0, 0.0
     for line in res.stdout.splitlines():
-        if "ex" in line.lower() or "execution" in line.lower() or "{" in line:
+        line = line.strip()
+        if line.startswith("{") and "ex" in line:
             try:
                 data = json.loads(line)
-                return data.get("lf", 0.0) * 100, data.get("ex", 0.0) * 100
+                lf_acc = float(data.get("lf", 0.0)) * 100
+                ex_acc = float(data.get("ex", 0.0)) * 100
+                return lf_acc, ex_acc
             except Exception:
                 pass
     return lf_acc, ex_acc
@@ -83,11 +85,13 @@ def generate_predictions_and_evaluate(model, sp, split="dev", method="greedy", o
     parse_failures = 0
     predictions = []
 
-    print(f"Generating predictions ({split}, {method})...")
-    for ex in examples:
+    print(f"\nGenerating {split} predictions ({method})... Total: {total}")
+    for i, ex in enumerate(examples):
+        if (i + 1) % 1000 == 0:
+            print(f"  Processed {i+1}/{total}...")
         header = tables[ex["table_id"]]["header"]
         src_text = encode_source(ex["question"], header)
-        src_ids = torch.tensor([sp.encode(src_text) + [EOS_ID]], dtype=torch.long)
+        src_ids = torch.tensor([sp.encode(src_text) + [EOS_ID]], dtype=torch.long, device=device)
 
         if method == "beam":
             token_ids, _ = beam_search_decode(model, src_ids, beam_size=4, max_len=64, device=device)
@@ -96,7 +100,7 @@ def generate_predictions_and_evaluate(model, sp, split="dev", method="greedy", o
 
         cleaned_ids = [t for t in token_ids if t not in (BOS_ID, EOS_ID)]
         pred_text = sp.decode(cleaned_ids)
-        parsed = parse_sql_string(pred_text)
+        parsed = parse_sql_string(pred_text, original_question=ex["question"])
 
         if parsed is not None:
             predictions.append({"query": parsed})
@@ -104,18 +108,19 @@ def generate_predictions_and_evaluate(model, sp, split="dev", method="greedy", o
             predictions.append({"error": "parse"})
             parse_failures += 1
 
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
     with open(output_path, "w", encoding="utf-8") as f:
         for p in predictions:
             f.write(json.dumps(p, ensure_ascii=False) + "\n")
 
     fail_rate = (parse_failures / total) * 100
     lf_acc, ex_acc = run_official_evaluator(split, output_path)
+    print(f"Results for {split} ({method}): LF={lf_acc:.2f}% | EX={ex_acc:.2f}% | Failures={fail_rate:.2f}%")
     return lf_acc, ex_acc, fail_rate
 
 
 def generate_samples_md(model, sp, device="cpu"):
-    """Generates results/samples.md: 5 correct and 5 wrong predictions."""
+    print("\nGenerating results/samples.md (Task 4.6)...")
     examples, tables = load_split("dev")
     correct_samples = []
     wrong_samples = []
@@ -126,12 +131,12 @@ def generate_samples_md(model, sp, device="cpu"):
 
         header = tables[ex["table_id"]]["header"]
         src_text = encode_source(ex["question"], header)
-        src_ids = torch.tensor([sp.encode(src_text) + [EOS_ID]], dtype=torch.long)
+        src_ids = torch.tensor([sp.encode(src_text) + [EOS_ID]], dtype=torch.long, device=device)
         token_ids, _ = greedy_decode(model, src_ids, max_len=64, device=device)
 
         cleaned_ids = [t for t in token_ids if t not in (BOS_ID, EOS_ID)]
         pred_text = sp.decode(cleaned_ids)
-        parsed = parse_sql_string(pred_text)
+        parsed = parse_sql_string(pred_text, original_question=ex["question"])
 
         gold_sql = format_readable_sql({"query": ex["sql"]}, header)
         pred_sql = format_readable_sql({"query": parsed} if parsed else None, header)
@@ -145,7 +150,6 @@ def generate_samples_md(model, sp, device="cpu"):
                 "pred": pred_sql
             })
         elif not is_correct and len(wrong_samples) < 5:
-            # Diagnose failure mode
             if parsed is None:
                 failure_type = "Parse failure"
             elif parsed["sel"] != ex["sql"]["sel"]:
@@ -164,7 +168,6 @@ def generate_samples_md(model, sp, device="cpu"):
                 "failure": failure_type
             })
 
-    # Write results/samples.md
     with open("results/samples.md", "w", encoding="utf-8") as f:
         f.write("# Qualitative Samples (10 Dev Examples)\n\n## Correct Predictions (5 Examples)\n\n")
         for i, s in enumerate(correct_samples, 1):
@@ -178,14 +181,14 @@ def generate_samples_md(model, sp, device="cpu"):
 
 
 def plot_attention_map(model, sp, example_idx=0, device="cpu"):
-    """Figure 4 / Task 5.3: Decoder cross-attention map."""
+    print("\nGenerating Figure 4: Cross-Attention Map (Task 5.3)...")
     examples, tables = load_split("dev")
     ex = examples[example_idx]
     header = tables[ex["table_id"]]["header"]
     src_text = encode_source(ex["question"], header)
 
     src_tokens = [sp.id_to_piece(idx) for idx in sp.encode(src_text) + [EOS_ID]]
-    src_ids = torch.tensor([sp.encode(src_text) + [EOS_ID]], dtype=torch.long)
+    src_ids = torch.tensor([sp.encode(src_text) + [EOS_ID]], dtype=torch.long, device=device)
 
     token_ids, cross_attn = greedy_decode(model, src_ids, max_len=64, device=device)
     tgt_tokens = [sp.id_to_piece(idx) for idx in token_ids]
@@ -202,6 +205,7 @@ def plot_attention_map(model, sp, example_idx=0, device="cpu"):
     plt.title("Figure 4: Decoder Cross-Attention Map (Last Layer, Averaged Over Heads)")
     plt.colorbar()
     plt.tight_layout()
+    os.makedirs("results/figures", exist_ok=True)
     plt.savefig("results/figures/figure4_attention_map.png", dpi=300)
     plt.close()
     print("Saved: results/figures/figure4_attention_map.png")
