@@ -4,24 +4,28 @@ from model.layers import EncoderLayer, DecoderLayer
 
 def make_padding_mask(seq, pad_id=0):
     """
-    Creates additive padding mask.
+    Creates an additive attention mask for padding positions.
     seq: (B, L)
-    Returns: (B, 1, 1, L) where padded positions are -1e9, valid positions are 0.0
+    Returns: (B, 1, 1, L) float tensor where:
+      - 0.0 for real tokens
+      - -1e9 for pad tokens
     """
-    # (B, 1, 1, L)
-    mask = (seq == pad_id).unsqueeze(1).unsqueeze(2)
-    return mask.masked_fill(mask, -1e9).float()
+    is_pad = (seq == pad_id).unsqueeze(1).unsqueeze(2)  # (B, 1, 1, L) bool
+    mask = torch.zeros_like(is_pad, dtype=torch.float32)
+    return mask.masked_fill(is_pad, -1e9)
+
 
 def make_causal_mask(size, device=None):
     """
-    Creates lower-triangular causal mask preventing future token attention.
-    Returns: (1, 1, size, size)
+    Creates a lower-triangular causal mask preventing future token attention.
+    Returns: (1, 1, size, size) float tensor where:
+      - 0.0 for allowed (past/present) tokens
+      - -1e9 for future tokens
     """
-    # Upper triangular without diagonal has 1s
     tri = torch.triu(torch.ones(size, size, dtype=torch.bool, device=device), diagonal=1)
-    mask = torch.zeros(size, size, device=device)
+    mask = torch.zeros(size, size, dtype=torch.float32, device=device)
     mask = mask.masked_fill(tri, -1e9)
-    return mask.unsqueeze(0).unsqueeze(1)  # (1, 1, size, size)
+    return mask.unsqueeze(0).unsqueeze(1)
 
 
 class TransformerEncoder(nn.Module):
@@ -57,6 +61,7 @@ class TransformerDecoder(nn.Module):
 class Seq2SeqTransformer(nn.Module):
     """
     Full Encoder-Decoder Transformer with tied embedding/output weights.
+    Strictly follows Vaswani et al. and the assignment constraints.
     """
     def __init__(self, enc_input_layer, dec_input_layer, shared_embedding, 
                  d_model=256, h=4, d_ff=1024, num_layers=3, dropout=0.1, pad_id=0):
@@ -90,12 +95,12 @@ class Seq2SeqTransformer(nn.Module):
         # src: (B, S), tgt: (B, T)
         src_mask = make_padding_mask(src, self.pad_id)
         
-        # Decoder self mask combines causal mask + tgt padding mask
+        # Decoder self-attention: causal mask + target padding mask
         tgt_pad_mask = make_padding_mask(tgt, self.pad_id)
         causal_mask = make_causal_mask(tgt.size(1), device=tgt.device)
         decoder_self_mask = tgt_pad_mask + causal_mask
 
-        # Cross mask hides padding in source sequence
+        # Cross-attention mask hides source padding positions from decoder queries
         cross_mask = make_padding_mask(src, self.pad_id)
 
         memory = self.encode(src, src_mask=src_mask)
