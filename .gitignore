@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+*.pt
+*.bin
+*.model
+*.vocab
+WikiSQL/
+*.tar.bz2
+spm_corpus.txt
+*_pairs.jsonl
+results/*.jsonl
+.ipynb_checkpoints/
