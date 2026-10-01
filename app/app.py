@@ -99,3 +99,4 @@ if st.button("Generate SQL"):
 
         st.markdown("**Executable SQL (with real column names):**")
         st.code(sql_readable, language="sql")
+
