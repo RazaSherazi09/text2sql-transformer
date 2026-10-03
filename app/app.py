@@ -4,6 +4,7 @@ import sentencepiece as spm
 import os
 import sys
 import time
+import html
 from huggingface_hub import hf_hub_download
 
 # Ensure current directory and root are in python path
@@ -24,10 +25,10 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# High-contrast CSS: Dark readable text, clear inputs, distinct code background
+# High-contrast CSS
 CUSTOM_CSS = """
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap');
 
 html, body, [data-testid="stAppViewContainer"] {
     background-color: #F8FAFC !important;
@@ -50,7 +51,7 @@ h1, h2, h3, h4, p, span, label {
     color: #0F172A !important;
 }
 
-/* High-contrast Inputs & Placeholders */
+/* High-contrast Inputs */
 input[type="text"], .stTextInput input {
     background-color: #FFFFFF !important;
     color: #0F172A !important;
@@ -123,6 +124,55 @@ div.stButton > button:first-child:hover {
     color: #0F172A;
     margin-top: 4px;
 }
+
+/* Custom Crystal Clear Terminal / Code Box */
+.terminal-card {
+    background: #0F172A;
+    border-radius: 12px;
+    padding: 18px 20px;
+    box-shadow: 0 10px 25px -5px rgba(15, 23, 42, 0.2);
+    border: 1px solid #1E293B;
+    margin-top: 10px;
+}
+
+.terminal-header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 12px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid #334155;
+}
+
+.dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+}
+.dot-red { background: #EF4444; }
+.dot-yellow { background: #F59E0B; }
+.dot-green { background: #10B981; }
+
+.sql-content {
+    color: #38BDF8 !important;
+    font-family: 'JetBrains Mono', monospace !important;
+    font-size: 1.05rem !important;
+    font-weight: 600 !important;
+    line-height: 1.6;
+    word-break: break-word;
+    white-space: pre-wrap;
+}
+
+.sql-keyword {
+    color: #F43F5E;
+    font-weight: 700;
+}
+.sql-column {
+    color: #FBBF24;
+}
+.sql-string {
+    color: #34D399;
+}
 </style>
 """
 st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
@@ -174,6 +224,15 @@ def load_model(checkpoint_path="best_model.pt", sp_path="sql_sp.model"):
     model.load_state_dict(state_dict)
     model.eval()
     return model, sp
+
+
+def highlight_sql(sql_str):
+    # Safe HTML escape first
+    escaped = html.escape(sql_str)
+    keywords = ["SELECT", "FROM", "WHERE", "AND", "OR", "COUNT", "MAX", "MIN", "SUM", "AVG"]
+    for kw in keywords:
+        escaped = escaped.replace(kw, f'<span class="sql-keyword">{kw}</span>')
+    return escaped
 
 
 # Top Header
@@ -316,11 +375,39 @@ with col_right:
 
         with tab_sql:
             st.markdown("<span style='font-size: 0.8rem; font-weight: 600; color: #64748B;'>EXECUTABLE SQL</span>", unsafe_allow_html=True)
-            st.code(res["sql_readable"], language="sql")
+            formatted_highlighted = highlight_sql(res["sql_readable"])
+            st.markdown(
+                f"""
+                <div class="terminal-card">
+                    <div class="terminal-header">
+                        <span class="dot dot-red"></span>
+                        <span class="dot dot-yellow"></span>
+                        <span class="dot dot-green"></span>
+                        <span style="font-size: 0.72rem; color: #94A3B8; margin-left: 8px; font-family: monospace;">sqlite3 &bull; output.sql</span>
+                    </div>
+                    <div class="sql-content">{formatted_highlighted}</div>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
 
         with tab_raw:
             st.markdown("<span style='font-size: 0.8rem; font-weight: 600; color: #64748B;'>DECODED MODEL TOKENS</span>", unsafe_allow_html=True)
-            st.code(res["pred_text"])
+            escaped_raw = html.escape(res["pred_text"])
+            st.markdown(
+                f"""
+                <div class="terminal-card">
+                    <div class="terminal-header">
+                        <span class="dot dot-red"></span>
+                        <span class="dot dot-yellow"></span>
+                        <span class="dot dot-green"></span>
+                        <span style="font-size: 0.72rem; color: #94A3B8; margin-left: 8px; font-family: monospace;">sentencepiece &bull; raw_tokens</span>
+                    </div>
+                    <div class="sql-content" style="color: #A5B4FC !important;">{escaped_raw}</div>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
 
         with tab_details:
             m1, m2 = st.columns(2)
