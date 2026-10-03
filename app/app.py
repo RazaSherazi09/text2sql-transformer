@@ -25,10 +25,10 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# High-contrast CSS
+# High-contrast Global Layout CSS
 CUSTOM_CSS = """
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600;700&display=swap');
 
 html, body, [data-testid="stAppViewContainer"] {
     background-color: #F8FAFC !important;
@@ -51,7 +51,7 @@ h1, h2, h3, h4, p, span, label {
     color: #0F172A !important;
 }
 
-/* High-contrast Inputs */
+/* High-contrast Inputs & Placeholders */
 input[type="text"], .stTextInput input {
     background-color: #FFFFFF !important;
     color: #0F172A !important;
@@ -72,7 +72,7 @@ input::placeholder {
     opacity: 1 !important;
 }
 
-/* High-contrast Action Button */
+/* Action Button */
 div.stButton > button:first-child {
     background: linear-gradient(135deg, #4F46E5 0%, #7C3AED 100%) !important;
     color: #FFFFFF !important;
@@ -91,7 +91,7 @@ div.stButton > button:first-child:hover {
     box-shadow: 0 6px 20px 0 rgba(79, 70, 229, 0.45) !important;
 }
 
-/* Chips for Column Names */
+/* Column Header Badges */
 .col-chip {
     display: inline-block;
     background: #EEF2FF;
@@ -123,55 +123,6 @@ div.stButton > button:first-child:hover {
     font-weight: 700;
     color: #0F172A;
     margin-top: 4px;
-}
-
-/* Custom Crystal Clear Terminal / Code Box */
-.terminal-card {
-    background: #0F172A;
-    border-radius: 12px;
-    padding: 18px 20px;
-    box-shadow: 0 10px 25px -5px rgba(15, 23, 42, 0.2);
-    border: 1px solid #1E293B;
-    margin-top: 10px;
-}
-
-.terminal-header {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    margin-bottom: 12px;
-    padding-bottom: 8px;
-    border-bottom: 1px solid #334155;
-}
-
-.dot {
-    width: 10px;
-    height: 10px;
-    border-radius: 50%;
-}
-.dot-red { background: #EF4444; }
-.dot-yellow { background: #F59E0B; }
-.dot-green { background: #10B981; }
-
-.sql-content {
-    color: #38BDF8 !important;
-    font-family: 'JetBrains Mono', monospace !important;
-    font-size: 1.05rem !important;
-    font-weight: 600 !important;
-    line-height: 1.6;
-    word-break: break-word;
-    white-space: pre-wrap;
-}
-
-.sql-keyword {
-    color: #F43F5E;
-    font-weight: 700;
-}
-.sql-column {
-    color: #FBBF24;
-}
-.sql-string {
-    color: #34D399;
 }
 </style>
 """
@@ -227,11 +178,14 @@ def load_model(checkpoint_path="best_model.pt", sp_path="sql_sp.model"):
 
 
 def highlight_sql(sql_str):
-    # Safe HTML escape first
     escaped = html.escape(sql_str)
+    # Bright high-contrast inline styling so no external CSS can ever override it
     keywords = ["SELECT", "FROM", "WHERE", "AND", "OR", "COUNT", "MAX", "MIN", "SUM", "AVG"]
     for kw in keywords:
-        escaped = escaped.replace(kw, f'<span class="sql-keyword">{kw}</span>')
+        escaped = escaped.replace(
+            kw, 
+            f'<span style="color: #FF5370 !important; font-weight: 800 !important; letter-spacing: 0.5px;">{kw}</span>'
+        )
     return escaped
 
 
@@ -378,14 +332,16 @@ with col_right:
             formatted_highlighted = highlight_sql(res["sql_readable"])
             st.markdown(
                 f"""
-                <div class="terminal-card">
-                    <div class="terminal-header">
-                        <span class="dot dot-red"></span>
-                        <span class="dot dot-yellow"></span>
-                        <span class="dot dot-green"></span>
-                        <span style="font-size: 0.72rem; color: #94A3B8; margin-left: 8px; font-family: monospace;">sqlite3 &bull; output.sql</span>
+                <div style="background-color: #0D1117 !important; border-radius: 12px; padding: 20px; border: 1.5px solid #30363D; margin-top: 8px; box-shadow: 0 10px 25px -5px rgba(0,0,0,0.3);">
+                    <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 14px; padding-bottom: 10px; border-bottom: 1px solid #21262D;">
+                        <span style="height: 11px; width: 11px; background: #FF5F56; border-radius: 50%; display: inline-block;"></span>
+                        <span style="height: 11px; width: 11px; background: #FFBD2E; border-radius: 50%; display: inline-block;"></span>
+                        <span style="height: 11px; width: 11px; background: #27C93F; border-radius: 50%; display: inline-block;"></span>
+                        <span style="color: #8B949E !important; font-family: monospace; font-size: 0.75rem; margin-left: 10px;">sqlite3 &bull; generated_query.sql</span>
                     </div>
-                    <div class="sql-content">{formatted_highlighted}</div>
+                    <div style="font-family: 'JetBrains Mono', 'Fira Code', monospace !important; font-size: 1.15rem !important; line-height: 1.7 !important; color: #58A6FF !important; white-space: pre-wrap !important; font-weight: 600 !important;">
+{formatted_highlighted}
+                    </div>
                 </div>
                 """,
                 unsafe_allow_html=True
@@ -396,14 +352,16 @@ with col_right:
             escaped_raw = html.escape(res["pred_text"])
             st.markdown(
                 f"""
-                <div class="terminal-card">
-                    <div class="terminal-header">
-                        <span class="dot dot-red"></span>
-                        <span class="dot dot-yellow"></span>
-                        <span class="dot dot-green"></span>
-                        <span style="font-size: 0.72rem; color: #94A3B8; margin-left: 8px; font-family: monospace;">sentencepiece &bull; raw_tokens</span>
+                <div style="background-color: #0D1117 !important; border-radius: 12px; padding: 20px; border: 1.5px solid #30363D; margin-top: 8px;">
+                    <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 14px; padding-bottom: 10px; border-bottom: 1px solid #21262D;">
+                        <span style="height: 11px; width: 11px; background: #FF5F56; border-radius: 50%; display: inline-block;"></span>
+                        <span style="height: 11px; width: 11px; background: #FFBD2E; border-radius: 50%; display: inline-block;"></span>
+                        <span style="height: 11px; width: 11px; background: #27C93F; border-radius: 50%; display: inline-block;"></span>
+                        <span style="color: #8B949E !important; font-family: monospace; font-size: 0.75rem; margin-left: 10px;">sentencepiece &bull; raw_tokens</span>
                     </div>
-                    <div class="sql-content" style="color: #A5B4FC !important;">{escaped_raw}</div>
+                    <div style="font-family: 'JetBrains Mono', monospace !important; font-size: 1.05rem !important; line-height: 1.6 !important; color: #A5B4FC !important; white-space: pre-wrap !important; font-weight: 600 !important;">
+{escaped_raw}
+                    </div>
                 </div>
                 """,
                 unsafe_allow_html=True
