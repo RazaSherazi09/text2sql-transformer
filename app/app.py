@@ -1,216 +1,352 @@
+import streamlit as st
+import torch
+import sentencepiece as spm
 import os
 import sys
 import time
-import torch
-import sentencepiece as spm
-import gradio as gr
 from huggingface_hub import hf_hub_download
 
-# Ensure local imports work
-sys.path.append(os.path.abspath(os.path.dirname(__file__)))
-
-# Handle optional local paths if running from Kaggle clone
-if os.path.exists("/kaggle/working/text2sql_local"):
-    sys.path.append("/kaggle/working/text2sql_local")
+# Ensure current directory and root are in python path
+current_dir = os.path.dirname(os.path.abspath(__file__))
+sys.path.append(current_dir)
+sys.path.append(os.path.abspath(os.path.join(current_dir, "..")))
 
 from starter.embeddings import TokenEmbedding, InputLayer
 from starter.tokenizer import PAD_ID, BOS_ID, EOS_ID
 from model.transformer import Seq2SeqTransformer
 from decode import greedy_decode, beam_search_decode, parse_sql_string, format_readable_sql
 
-REPO_ID = "razaasherazi/text2sql-transformer"
-CKPT_PATH = "best_model.pt"
-SP_PATH = "sql_sp.model"
-
-# Auto-download model weights and tokenizer if missing
-if not os.path.exists(SP_PATH):
-    print("--> Downloading tokenizer from Hugging Face...")
-    hf_hub_download(repo_id=REPO_ID, filename=SP_PATH, local_dir=".")
-
-if not os.path.exists(CKPT_PATH):
-    print("--> Downloading best_model.pt from Hugging Face...")
-    hf_hub_download(repo_id=REPO_ID, filename=CKPT_PATH, local_dir=".")
-
-# Load SentencePiece & Transformer Model
-sp = spm.SentencePieceProcessor(model_file=SP_PATH)
-vocab_size = sp.get_piece_size()
-d_model = 256
-
-shared_emb = TokenEmbedding(vocab_size, d_model, pad_id=PAD_ID)
-enc_in = InputLayer(shared_emb, d_model=d_model, dropout=0.0)
-dec_in = InputLayer(shared_emb, d_model=d_model, dropout=0.0)
-
-model = Seq2SeqTransformer(
-    enc_input_layer=enc_in,
-    dec_input_layer=dec_in,
-    shared_embedding=shared_emb,
-    d_model=d_model,
-    h=4,
-    d_ff=1024,
-    num_layers=3,
-    dropout=0.0,
-    pad_id=PAD_ID
+# Page configuration
+st.set_page_config(
+    page_title="Text-to-SQL Transformer Studio",
+    page_icon="⚡",
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
 
-checkpoint = torch.load(CKPT_PATH, map_location="cpu")
-state_dict = checkpoint["model_state_dict"] if "model_state_dict" in checkpoint else checkpoint
-model.load_state_dict(state_dict)
-model.eval()
+# High-contrast CSS: Dark readable text, clear inputs, distinct code background
+CUSTOM_CSS = """
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
 
-def generate_sql(question, columns, decoding_strategy, beam_size, max_length):
-    if not question or not question.strip() or not columns or not columns.strip():
-        return "-- Error: Please provide both a question and table column headers.", "", "{}", ""
-
-    headers = [c.strip() for c in columns.split(",") if c.strip()]
-    cols_formatted = " ".join(f"<c{i}> {name}" for i, name in enumerate(headers))
-    src_text = f"{question.strip()} <sep> {cols_formatted}".lower()
-
-    src_ids = torch.tensor([sp.encode(src_text) + [EOS_ID]], dtype=torch.long)
-
-    start_time = time.perf_counter()
-    if decoding_strategy == "Greedy":
-        pred_ids, _ = greedy_decode(model, src_ids, max_len=int(max_length))
-    else:
-        pred_ids, _ = beam_search_decode(model, src_ids, beam_size=int(beam_size), max_len=int(max_length))
-    
-    elapsed_ms = (time.perf_counter() - start_time) * 1000
-
-    cleaned_ids = [t for t in pred_ids if t not in (BOS_ID, EOS_ID)]
-    pred_text = sp.decode(cleaned_ids)
-    parsed = parse_sql_string(pred_text)
-    readable_sql = format_readable_sql(parsed, headers)
-
-    metadata = (
-        f"Latency: {elapsed_ms:.1f} ms | Strategy: {decoding_strategy} "
-        f"{f'(k={beam_size})' if decoding_strategy == 'Beam Search' else ''} | "
-        f"Tokens: {len(cleaned_ids)}"
-    )
-
-    return readable_sql, pred_text, str(parsed), metadata
-
-# High-contrast CSS fixing all input text, placeholders, and output code colors
-HIGH_CONTRAST_CSS = """
-/* Input text boxes */
-input[type="text"], textarea, .gr-textbox input, .gr-textbox textarea {
-    color: #0f172a !important;
-    background-color: #ffffff !important;
-    font-weight: 500 !important;
-    border: 1.5px solid #cbd5e1 !important;
-    border-radius: 8px !important;
+html, body, [data-testid="stAppViewContainer"] {
+    background-color: #F8FAFC !important;
+    color: #0F172A !important;
+    font-family: 'Plus Jakarta Sans', sans-serif !important;
 }
 
-/* Placeholders */
-input::placeholder, textarea::placeholder {
-    color: #64748b !important;
+[data-testid="stSidebar"] {
+    background-color: #FFFFFF !important;
+    border-right: 1px solid #E2E8F0 !important;
+}
+
+#MainMenu, header, footer {
+    visibility: hidden !important;
+    display: none !important;
+}
+
+h1, h2, h3, h4, p, span, label {
+    font-family: 'Plus Jakarta Sans', sans-serif !important;
+    color: #0F172A !important;
+}
+
+/* High-contrast Inputs & Placeholders */
+input[type="text"], .stTextInput input {
+    background-color: #FFFFFF !important;
+    color: #0F172A !important;
+    border: 1.5px solid #CBD5E1 !important;
+    border-radius: 10px !important;
+    padding: 10px 14px !important;
+    font-size: 0.95rem !important;
+    font-weight: 500 !important;
+}
+
+input[type="text"]:focus, .stTextInput input:focus {
+    border-color: #4F46E5 !important;
+    box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.15) !important;
+}
+
+input::placeholder {
+    color: #64748B !important;
     opacity: 1 !important;
 }
 
-/* Focused inputs */
-input[type="text"]:focus, textarea:focus {
-    border-color: #4f46e5 !important;
-    outline: 2px solid rgba(79, 70, 229, 0.2) !important;
-}
-
-/* Code block output styling */
-.gr-code pre, .gr-code code, pre code, .code-wrap pre {
-    background-color: #0f172a !important;
-    color: #38bdf8 !important;
-    font-size: 0.95rem !important;
-    font-family: 'JetBrains Mono', 'Fira Code', monospace !important;
-    padding: 14px !important;
-    border-radius: 8px !important;
-}
-
-/* Labels & text headings */
-label, .gr-form label, span.text-gray-500 {
-    color: #1e293b !important;
+/* High-contrast Action Button */
+div.stButton > button:first-child {
+    background: linear-gradient(135deg, #4F46E5 0%, #7C3AED 100%) !important;
+    color: #FFFFFF !important;
+    border: none !important;
+    border-radius: 12px !important;
+    padding: 12px 24px !important;
     font-weight: 600 !important;
+    font-size: 1rem !important;
+    width: 100% !important;
+    box-shadow: 0 4px 14px 0 rgba(79, 70, 229, 0.35) !important;
+    transition: all 0.2s ease-in-out !important;
 }
+
+div.stButton > button:first-child:hover {
+    transform: translateY(-2px) !important;
+    box-shadow: 0 6px 20px 0 rgba(79, 70, 229, 0.45) !important;
+}
+
+/* Chips for Column Names */
+.col-chip {
+    display: inline-block;
+    background: #EEF2FF;
+    color: #4338CA;
+    padding: 4px 12px;
+    border-radius: 8px;
+    font-size: 0.78rem;
+    font-weight: 600;
+    margin: 4px 6px 4px 0;
+    border: 1px solid #E0E7FF;
+}
+
+.metric-box {
+    background-color: #FFFFFF;
+    border: 1px solid #E2E8F0;
+    border-radius: 12px;
+    padding: 14px;
+    margin-bottom: 12px;
+}
+.metric-label {
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: #64748B;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+.metric-value {
+    font-size: 1.15rem;
+    font-weight: 700;
+    color: #0F172A;
+    margin-top: 4px;
+}
+</style>
 """
+st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
 
-with gr.Blocks(theme=gr.themes.Base(), css=HIGH_CONTRAST_CSS, title="Text-to-SQL Transformer Studio") as demo:
-    gr.Markdown(
-        """
-        # ⚡ Text-to-SQL Transformer Studio
-        *Translate natural English questions over table schemas into executable SQL queries via a custom Transformer built from scratch.*
-        """
+
+@st.cache_resource
+def load_model(checkpoint_path="best_model.pt", sp_path="sql_sp.model"):
+    repo_id = "razaasherazi/text2sql-transformer"
+
+    if not os.path.exists(sp_path):
+        with st.spinner("Downloading tokenizer from Hugging Face..."):
+            try:
+                hf_hub_download(repo_id=repo_id, filename="sql_sp.model", local_dir=".")
+            except Exception as e:
+                st.error(f"Error downloading tokenizer: {e}")
+
+    if not os.path.exists(checkpoint_path):
+        with st.spinner("Downloading best_model.pt from Hugging Face..."):
+            try:
+                hf_hub_download(repo_id=repo_id, filename="best_model.pt", local_dir=".")
+            except Exception as e:
+                st.error(f"Error downloading checkpoint: {e}")
+
+    if not os.path.exists(sp_path) or not os.path.exists(checkpoint_path):
+        return None, None
+
+    sp = spm.SentencePieceProcessor(model_file=sp_path)
+    vocab_size = sp.get_piece_size()
+    d_model = 256
+
+    shared_emb = TokenEmbedding(vocab_size, d_model, pad_id=PAD_ID)
+    enc_in = InputLayer(shared_emb, d_model=d_model, dropout=0.0)
+    dec_in = InputLayer(shared_emb, d_model=d_model, dropout=0.0)
+
+    model = Seq2SeqTransformer(
+        enc_input_layer=enc_in,
+        dec_input_layer=dec_in,
+        shared_embedding=shared_emb,
+        d_model=d_model,
+        h=4,
+        d_ff=1024,
+        num_layers=3,
+        dropout=0.0,
+        pad_id=PAD_ID
     )
 
-    with gr.Row():
-        with gr.Column(scale=1):
-            gr.Markdown("### 1. Input Specification")
-            input_question = gr.Textbox(
-                label="Natural Language Question",
-                placeholder="e.g. What is Terrence Ross' nationality?",
-                value="What is Terrence Ross' nationality?"
-            )
-            input_columns = gr.Textbox(
-                label="Table Column Headers (Comma-separated)",
-                placeholder="e.g. Player, No., Nationality, Position",
-                value="Player, No., Nationality, Position, Years in Toronto, School/Club Team"
-            )
+    checkpoint = torch.load(checkpoint_path, map_location="cpu")
+    state_dict = checkpoint["model_state_dict"] if "model_state_dict" in checkpoint else checkpoint
+    model.load_state_dict(state_dict)
+    model.eval()
+    return model, sp
 
-            with gr.Accordion("⚙️ Inference Settings", open=False):
-                strategy = gr.Radio(
-                    choices=["Greedy", "Beam Search"],
-                    value="Greedy",
-                    label="Decoding Strategy"
-                )
-                beam_slider = gr.Slider(
-                    minimum=2, maximum=8, value=4, step=1,
-                    label="Beam Size (k)"
-                )
-                max_len_slider = gr.Slider(
-                    minimum=16, maximum=128, value=64, step=8,
-                    label="Max Sequence Length"
-                )
 
-            btn = gr.Button("⚡ Generate SQL Query", variant="primary")
+# Top Header
+st.markdown(
+    """
+    <div style="margin-bottom: 24px;">
+        <h1 style="font-size: 2.2rem; font-weight: 800; letter-spacing: -0.02em; margin-bottom: 6px;">
+            Text-to-SQL <span style="background: linear-gradient(135deg, #4F46E5 0%, #7C3AED 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">Transformer Studio</span>
+        </h1>
+        <p style="font-size: 0.95rem; color: #64748B; margin-bottom: 14px;">
+            Translating natural language questions over table schemas into executable SQL queries via a custom Transformer built from scratch.
+        </p>
+    </div>
+    """,
+    unsafe_allow_html=True
+)
 
-            gr.Examples(
-                examples=[
-                    [
-                        "What is Terrence Ross' nationality?",
-                        "Player, No., Nationality, Position, Years in Toronto, School/Club Team",
-                        "Greedy", 4, 64
-                    ],
-                    [
-                        "What is the highest attendance recorded?",
-                        "Game, Date, Opponent, Result, Attendance",
-                        "Greedy", 4, 64
-                    ],
-                    [
-                        "How many cities have a population greater than 500000?",
-                        "Rank, City, State, Population, Area",
-                        "Beam Search", 4, 64
-                    ]
-                ],
-                inputs=[input_question, input_columns, strategy, beam_slider, max_len_slider]
-            )
+# Initialize Session State
+if "question_text" not in st.session_state:
+    st.session_state["question_text"] = "What is Terrence Ross' nationality?"
+if "columns_text" not in st.session_state:
+    st.session_state["columns_text"] = "Player, No., Nationality, Position, Years in Toronto, School/Club Team"
+if "results_data" not in st.session_state:
+    st.session_state["results_data"] = None
 
-        with gr.Column(scale=1):
-            gr.Markdown("### 2. Synthesized SQL & Diagnostics")
-            out_sql = gr.Code(label="Executable SQL", language="sql")
-            out_meta = gr.Textbox(label="Execution Diagnostics", interactive=False)
-            
-            with gr.Accordion("🔍 Raw Model Tokens & AST", open=False):
-                out_raw = gr.Textbox(label="Raw Vocabulary Output", interactive=False)
-                out_ast = gr.Textbox(label="Parsed Schema AST Dictionary", interactive=False)
+model, sp = load_model()
 
-    btn.click(
-        fn=generate_sql,
-        inputs=[input_question, input_columns, strategy, beam_slider, max_len_slider],
-        outputs=[out_sql, out_raw, out_ast, out_meta]
+# Sidebar: Controls
+with st.sidebar:
+    st.markdown("### Runtime Status")
+    if model is not None:
+        st.success("● Model Ready (`best_model.pt`)")
+    else:
+        st.warning("▲ Model Not Found")
+
+    st.markdown("---")
+    st.markdown("### Inference Settings")
+    decode_mode = st.radio("Decoding Strategy", ["Greedy", "Beam Search"], index=0)
+
+    beam_size = 4
+    if decode_mode == "Beam Search":
+        beam_size = st.slider("Beam Size (k)", min_value=2, max_value=8, value=4)
+
+    max_len = st.slider("Max Output Length", min_value=16, max_value=128, value=64, step=8)
+
+# Layout
+col_left, col_right = st.columns([1, 1], gap="large")
+
+PRESETS = [
+    {
+        "label": "🏀 NBA Player",
+        "q": "What is Terrence Ross' nationality?",
+        "cols": "Player, No., Nationality, Position, Years in Toronto, School/Club Team"
+    },
+    {
+        "label": "🏆 Attendance",
+        "q": "What is the highest attendance recorded?",
+        "cols": "Game, Date, Opponent, Result, Attendance"
+    },
+    {
+        "label": "👥 Population",
+        "q": "How many cities have a population greater than 500000?",
+        "cols": "Rank, City, State, Population, Area"
+    }
+]
+
+with col_left:
+    st.markdown("### 1. Query Specification")
+    st.markdown("<span style='font-size: 0.8rem; font-weight: 600; color: #64748B;'>EXAMPLE PRESETS</span>", unsafe_allow_html=True)
+    preset_cols = st.columns(len(PRESETS))
+    for idx, preset in enumerate(PRESETS):
+        if preset_cols[idx].button(preset["label"], key=f"preset_{idx}"):
+            st.session_state["question_text"] = preset["q"]
+            st.session_state["columns_text"] = preset["cols"]
+            st.rerun()
+
+    question = st.text_input(
+        "Natural Language Question",
+        value=st.session_state["question_text"],
+        key="input_q"
     )
 
-    gr.Markdown(
-        """
-        ---
-        <small style="color: #64748B;">
-        Architecture: Seq2Seq Transformer (7.58M params, d_model=256, 4 heads, 3 layers) • WikiSQL Benchmark Baseline
-        </small>
-        """
+    columns_input = st.text_input(
+        "Table Headers (Comma-separated)",
+        value=st.session_state["columns_text"],
+        key="input_cols"
     )
 
-if __name__ == "__main__":
-    demo.launch(share=True)
+    parsed_header_chips = [c.strip() for c in columns_input.split(",") if c.strip()]
+    if parsed_header_chips:
+        chips_html = "".join([f'<span class="col-chip">{c}</span>' for c in parsed_header_chips])
+        st.markdown(f"<div style='margin-bottom: 18px;'>{chips_html}</div>", unsafe_allow_html=True)
+
+    generate_clicked = st.button("Generate SQL Query ⚡")
+
+    if generate_clicked:
+        if not question.strip() or not columns_input.strip():
+            st.error("Please supply both a natural question and table headers.")
+        elif model is None:
+            st.error("Model checkpoint not available. Please verify 'best_model.pt'.")
+        else:
+            headers = [c.strip() for c in columns_input.split(",") if c.strip()]
+            cols_formatted = " ".join(f"<c{i}> {name}" for i, name in enumerate(headers))
+            src_text = f"{question.strip()} <sep> {cols_formatted}".lower()
+            src_ids = torch.tensor([sp.encode(src_text) + [EOS_ID]], dtype=torch.long)
+
+            start_t = time.perf_counter()
+            with st.spinner("Generating query..."):
+                if decode_mode == "Greedy":
+                    pred_ids, _ = greedy_decode(model, src_ids, max_len=max_len)
+                    mode_used = "Greedy"
+                else:
+                    pred_ids, _ = beam_search_decode(model, src_ids, beam_size=beam_size, max_len=max_len)
+                    mode_used = f"Beam Search (k={beam_size})"
+
+                cleaned_ids = [t for t in pred_ids if t not in (BOS_ID, EOS_ID)]
+                pred_text = sp.decode(cleaned_ids)
+                parsed = parse_sql_string(pred_text)
+                sql_readable = format_readable_sql(parsed, headers)
+            duration = time.perf_counter() - start_t
+
+            st.session_state["results_data"] = {
+                "pred_text": pred_text,
+                "sql_readable": sql_readable,
+                "parsed": parsed,
+                "headers": headers,
+                "mode": mode_used,
+                "duration": duration,
+                "tokens": len(cleaned_ids)
+            }
+
+with col_right:
+    st.markdown("### 2. Synthesized SQL Result")
+    res = st.session_state["results_data"]
+
+    if res is None:
+        st.info("Fill out the inputs on the left and click **Generate SQL Query ⚡**.")
+    else:
+        tab_sql, tab_raw, tab_details = st.tabs(["Formatted SQL", "Raw Tokens", "Metadata"])
+
+        with tab_sql:
+            st.markdown("<span style='font-size: 0.8rem; font-weight: 600; color: #64748B;'>EXECUTABLE SQL</span>", unsafe_allow_html=True)
+            st.code(res["sql_readable"], language="sql")
+
+        with tab_raw:
+            st.markdown("<span style='font-size: 0.8rem; font-weight: 600; color: #64748B;'>DECODED MODEL TOKENS</span>", unsafe_allow_html=True)
+            st.code(res["pred_text"])
+
+        with tab_details:
+            m1, m2 = st.columns(2)
+            with m1:
+                st.markdown(
+                    f"""
+                    <div class="metric-box">
+                        <div class="metric-label">Strategy</div>
+                        <div class="metric-value">{res["mode"]}</div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True
+                )
+            with m2:
+                st.markdown(
+                    f"""
+                    <div class="metric-box">
+                        <div class="metric-label">Latency</div>
+                        <div class="metric-value">{res["duration"]*1000:.1f} ms</div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True
+                )
+
+            st.markdown("<span style='font-size: 0.8rem; font-weight: 600; color: #64748B;'>PARSED SCHEMA AST</span>", unsafe_allow_html=True)
+            st.json(res["parsed"])
+
+st.markdown("---")
+st.caption("Seq2Seq Transformer (7.58M parameters) • Built from scratch without pretrained weights • WikiSQL Benchmark")
